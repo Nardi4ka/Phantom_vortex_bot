@@ -352,64 +352,62 @@ class MainPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label='📝 Регистрация команды', style=discord.ButtonStyle.primary, custom_id='register_btn')
+    @discord.ui.button(label='📝 Регистрация команды', style=discord.ButtonStyle.primary, custom_id='main_register_btn')
     async def register_team(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrationModal())
     
-    @discord.ui.button(label='🎮 Создать полноценный клоз', style=discord.ButtonStyle.success, custom_id='create_full_clash_btn')
+    @discord.ui.button(label='🎮 Создать полноценный клоз', style=discord.ButtonStyle.success, custom_id='main_create_clash_btn')
     async def create_full_clash(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_id = str(interaction.user.id)
-        
-        if user_id not in registered_teams:
+        try:
+            user_id = str(interaction.user.id)
+            
+            if user_id not in registered_teams:
+                await interaction.response.send_message(
+                    "❌ Сначала зарегистрируйте команду!", 
+                    ephemeral=True
+                )
+                return
+            
+            team_data = registered_teams[user_id]
+            
+            # Проверяем лимит клозов
+            user_categories = [c for c in interaction.guild.categories if interaction.user.display_name in c.name]
+            if len(user_categories) >= 2:
+                await interaction.response.send_message(
+                    "❌ У вас уже есть 2 активных клоза!", 
+                    ephemeral=True
+                )
+                return
+            
+            # Создаем клоз
+            category = await create_full_clash(
+                interaction, 
+                team_data['team_name'],
+                team_data['captain'], 
+                team_data['game']
+            )
+            
             await interaction.response.send_message(
-                "❌ Сначала зарегистрируйте команду через кнопку '📝 Регистрация команды'!", 
+                f"✅ Полноценный клоз создан! {category.mention}", 
                 ephemeral=True
             )
-            return
-        
-        team_data = registered_teams[user_id]
-        
-        user_closes = sum(1 for category in interaction.guild.categories 
-                         if f"🎮 {interaction.user.display_name}" in category.name)
-        if user_closes >= 2:
-            await interaction.response.send_message(
-                "❌ У вас уже есть 2 активных клозов! Дождитесь их удаления.", 
-                ephemeral=True
-            )
-            return
-        
-        category = await create_full_clash(
-            interaction, 
-            team_data['team_name'],
-            team_data['captain'], 
-            team_data['game']
-        )
-        
-        await interaction.response.send_message(
-            f"✅ Полноценный клоз создан! {category.mention}\n"
-            f"• 🟢 Войс для союзников (5 слотов)\n" 
-            f"• 🔴 Войс для противников (5 слотов)\n"
-            f"• 📚 Полезные источники\n"
-            f"• 👥 Панель приглашения\n"
-            f"• ⏰ Удалится через 4 часа", 
-            ephemeral=True
-        )
+            
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Ошибка: {str(e)}", ephemeral=True)
     
-    @discord.ui.button(label='📊 Список команд', style=discord.ButtonStyle.secondary, custom_id='teams_list_btn')
+    @discord.ui.button(label='📊 Список команд', style=discord.ButtonStyle.secondary, custom_id='main_list_teams_btn')
     async def show_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not registered_teams:
-            embed = discord.Embed(title="📊 Список команд", description="Пока никто не зарегистрировался", color=0xf39c12)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message("📊 Пока нет команд", ephemeral=True)
             return
         
         teams_list = ""
         for user_id, team_data in registered_teams.items():
-            user = await bot.fetch_user(int(user_id))
+            user = bot.get_user(int(user_id))
             username = user.name if user else "Неизвестный"
             teams_list += f"• **{team_data['team_name']}** ({team_data['game'].upper()}) - {username}\n"
         
         embed = discord.Embed(title="📊 Зарегистрированные команды", description=teams_list, color=0x2ecc71)
-        embed.add_field(name="📈 Статистика:", value=f"Всего команд: **{len(registered_teams)}**", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ===== ОБРАБОТЧИКИ СОБЫТИЙ =====
@@ -459,6 +457,7 @@ print("✅ Мониторинг запущен на порту 5000")
 
 # ===== ЗАПУСК =====
 bot.run(os.getenv('TOKEN'))
+
 
 
 
