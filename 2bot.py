@@ -378,19 +378,16 @@ async def create_full_clash(interaction: discord.Interaction, team_name: str, ca
     )
     
     # Создаем текстовые каналы
-    info_channel = await category.create_text_channel(f"📋-{team_name}-инфо")
-    chat_channel = await category.create_text_channel(f"💬-{team_name}-чат")
-    coordination_channel = await category.create_text_channel(f"🎯-пригласить-игроков")
-    
-    # Создаем войс-каналы с ограничением на 5 человек
-    ally_voice = await category.create_voice_channel(
-        name=f"🟢-союзники-{team_name}",
-        user_limit=5
-    )
-    
-    enemy_voice = await category.create_voice_channel(
-        name=f"🔴-противники-{team_name}",
-        user_limit=5
+info_channel = await category.create_text_channel(f"📋-{team_name}-инфо")
+chat_channel = await category.create_text_channel(f"💬-{team_name}-чат")
+invite_channel = await category.create_text_channel(f"📩-приглашения")  # ← НОВОЕ НАЗВАНИЕ
+
+# Создаем войс-каналы
+ally_voice = await category.create_voice_channel(f"🟢-союзники-{team_name}", user_limit=5)
+enemy_voice = await category.create_voice_channel(f"🔴-противники-{team_name}", user_limit=5)
+
+# ОТПРАВЛЯЕМ ПАНЕЛЬ В ПРАВИЛЬНЫЙ КАНАЛ:
+await invite_channel.send(embed=invite_embed, view=ClashInviteView(team_role.id, opponent_role_id, team_name))
     )
     
     # Добавляем капитана в роль команды
@@ -667,4 +664,5 @@ print("✅ Мониторинг запущен на порту 5000")
 
 # ===== ЗАПУСК =====
 bot.run(os.getenv('TOKEN'))
+
 
