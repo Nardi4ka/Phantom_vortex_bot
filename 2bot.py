@@ -337,29 +337,105 @@ class RegistrationModal(discord.ui.Modal, title='📝 Регистрация к�
         embed.add_field(name="🎮 Игра:", value=game.upper(), inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-async def delete_empty_clash(category, delay_seconds):
-    await asyncio.sleep(delay_seconds)
-    try:
-        empty = True
-        for channel in category.channels:
-            if isinstance(channel, discord.VoiceChannel) and len(channel.members) > 0:
-                empty = False
-                break
-        
-        if empty:
-            # Удаляем роли
-            for role in category.guild.roles:
-                if "👥" in role.name or "⚔️" in role.name:
-                    for category_role in ["👥", "⚔️"]:
-                        if category_role in role.name and category.name.split(' ')[1] in role.name:
-                            await role.delete()
-            
-            # Удаляем каналы и категорию
-            for channel in category.channels:
-                await channel.delete()
-            await category.delete()
-    except:
-        pass
+# ===== ФУНКЦИЯ СОЗДАНИЯ ПОЛНОЦЕННОГО КЛОЗА =====
+async def create_full_clash(interaction: discord.Interaction, team_name: str, captain_name: str, game_type: str):
+    """Создает полноценный клоз с ролями, войсами и панелями"""
+    
+    # Форматируем название категории по игре и нику капитана
+    game_display_names = {
+        "dota 2": "Dota 2",
+        "cs2": "CS2"
+    }
+    
+    game_display = game_display_names.get(game_type.lower(), game_type.upper())
+    category_name = f"🎮 {game_display} | {captain_name}"
+    
+    # Создаем уникальные роли для клоза
+    team_role = await interaction.guild.create_role(
+        name=f"👥 {team_name}",
+        color=discord.Color.green(),
+        hoist=True
+    )
+    
+    opponent_role = await interaction.guild.create_role(
+        name=f"⚔️ {team_name}",
+        color=discord.Color.red(),
+        hoist=True
+    )
+    
+    # Настройки прав доступа
+    overwrites = {
+        interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False, connect=False),
+        team_role: discord.PermissionOverwrite(read_messages=True, connect=True, send_messages=True),
+        opponent_role: discord.PermissionOverwrite(read_messages=True, connect=True, send_messages=True),
+        interaction.guild.me: discord.PermissionOverwrite(read_messages=True, connect=True, send_messages=True)
+    }
+    
+    # Создаем категорию
+    category = await interaction.guild.create_category(
+        name=category_name,
+        overwrites=overwrites
+    )
+    
+    # Создаем текстовые каналы
+    info_channel = await category.create_text_channel(f"📋-{team_name}-инфо")
+    chat_channel = await category.create_text_channel(f"💬-{team_name}-чат")
+    coordination_channel = await category.create_text_channel(f"🎯-координация")
+    
+    # Создаем войс-каналы с ограничением на 5 человек
+    ally_voice = await category.create_voice_channel(
+        name=f"🟢-союзники-{team_name}",
+        user_limit=5
+    )
+    
+    enemy_voice = await category.create_voice_channel(
+        name=f"🔴-противники-{team_name}",
+        user_limit=5
+    )
+    
+    # Добавляем капитана в роль команды
+    await interaction.user.add_roles(team_role)
+    
+    # Отправляем панель приглашения в канал координации
+    invite_embed = discord.Embed(
+        title=f"🎮 Панель управления клозом {team_name}",
+        description="Используйте кнопки ниже для приглашения участников",
+        color=0x9b59b6
+    )
+    invite_embed.add_field(name="🟢 Союзники", value="Ваша команда", inline=True)
+    invite_embed.add_field(name="🔴 Противники", value="Команда оппонентов", inline=True)
+    invite_embed.add_field(name="🎮 Игра", value=game_display, inline=True)
+    
+    await coordination_channel.send(embed=invite_embed, view=ClashInviteView(team_role.id, opponent_role.id, team_name))
+    
+    # Отправляем информационное сообщение с источниками
+    sources_embed = discord.Embed(
+        title="📚 Полезные источники",
+        color=0x3498db
+    )
+    
+    if game_type.lower() == "dota 2":
+        sources_embed.description = "**Для Dota 2:**"
+        sources_embed.add_field(
+            name="📊 Статистика и аналитика",
+            value="• [DotaBuff](https://www.dotabuff.com)\n• [Stratz](https://stratz.com)\n• [Dota2ProTracker](https://www.dota2protracker.com)",
+            inline=False
+        )
+    elif game_type.lower() == "cs2":
+        sources_embed.description = "**Для CS2:**"
+        sources_embed.add_field(
+            name="📊 Статистика и аналитика", 
+            value="• [HLTV](https://www.hltv.org)\n• [Leetify](https://leetify.com)\n• [ScopeGG](https://scope.gg)",
+            inline=False
+        )
+    
+    sources_message = await info_channel.send(embed=sources_embed)
+    await sources_message.pin()
+    
+    # Запускаем таймер удаления через 4 часа
+    asyncio.create_task(delete_close_after_delay(category, 4 * 60 * 60))
+    
+    return category
 
 # ===== ФУНКЦИЯ АВТОУДАЛЕНИЯ КЛОЗОВ ЧЕРЕЗ 4 ЧАСА =====
 async def delete_close_after_delay(category, delay_seconds):
@@ -367,27 +443,27 @@ async def delete_close_after_delay(category, delay_seconds):
     await asyncio.sleep(delay_seconds)
     
     try:
-        # Проверяем, пустые ли каналы
-        empty = True
-        for channel in category.channels:
-            if isinstance(channel, discord.VoiceChannel) and len(channel.members) > 0:
-                empty = False
-                break
+        # Удаляем все роли связанные с клозом
+        for role in category.guild.roles:
+            if "👥" in role.name or "⚔️" in role.name:
+                # Проверяем что роль принадлежит этому клозу
+                role_team_name = role.name.split(' ', 1)[1] if ' ' in role.name else role.name
+                if role_team_name in category.name:
+                    await role.delete()
         
-        if empty:
-            # Удаляем все каналы в категории
-            for channel in category.channels:
-                await channel.delete()
-            await category.delete()
-        else:
-            # Если есть люди - проверяем еще через 1 час
-            asyncio.create_task(delete_close_after_delay(category, 3600))
+        # Удаляем все каналы в категории
+        for channel in category.channels:
+            await channel.delete()
+        
+        # Удаляем саму категорию
+        await category.delete()
+        
     except discord.NotFound:
         pass  # Категория уже удалена
     except Exception as e:
         print(f"❌ Ошибка удаления клоза: {e}")
 
-# ===== ОСНОВНАЯ ПАНЕЛЬ С КЛОЗАМИ НА 4 ЧАСА =====
+# ===== ОСНОВНАЯ ПАНЕЛЬ С КЛОЗАМИ =====
 class MainPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -396,13 +472,23 @@ class MainPanelView(discord.ui.View):
     async def register_team(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrationModal())
     
-    @discord.ui.button(label='🎮 Создать клоз (4 часа)', style=discord.ButtonStyle.success, custom_id='create_clash_btn')
-    async def create_clash(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label='🎮 Создать полноценный клоз', style=discord.ButtonStyle.success, custom_id='create_full_clash_btn')
+    async def create_full_clash(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
+        
+        # Проверяем регистрацию
+        if user_id not in registered_teams:
+            await interaction.response.send_message(
+                "❌ Сначала зарегистрируйте команду через кнопку '📝 Регистрация команды'!", 
+                ephemeral=True
+            )
+            return
+        
+        team_data = registered_teams[user_id]
         
         # Проверяем лимит клозов (2 на пользователя)
         user_closes = sum(1 for category in interaction.guild.categories 
-                         if f"🎮 {interaction.user.name}" in category.name)
+                         if f"🎮 {interaction.user.display_name}" in category.name)
         if user_closes >= 2:
             await interaction.response.send_message(
                 "❌ У вас уже есть 2 активных клоза! Дождитесь их удаления.", 
@@ -410,61 +496,23 @@ class MainPanelView(discord.ui.View):
             )
             return
         
-        # Создаем приватные каналы
-        overwrites = {
-            interaction.guild.default_role: discord.PermissionOverwrite(connect=False, read_messages=False),
-            interaction.user: discord.PermissionOverwrite(connect=True, read_messages=True, send_messages=True),
-            interaction.guild.me: discord.PermissionOverwrite(connect=True, read_messages=True, send_messages=True)
-        }
-        
-        # Создаем категорию
-        category_name = f"🎮 {interaction.user.name} | 4h"
-        category = await interaction.guild.create_category_channel(
-            name=category_name,
-            overwrites=overwrites,
-            position=0
+        # Создаем полноценный клоз
+        category = await create_full_clash(
+            interaction, 
+            team_data['team_name'],
+            team_data['captain'], 
+            team_data['game']
         )
         
-        # Создаем голосовой канал
-        voice_channel = await category.create_voice_channel(
-            name="🔊 Голосовой чат",
-            user_limit=10
-        )
-        
-        # Создаем текстовый канал
-        text_channel = await category.create_text_channel(
-            name="💬 Общий чат"
-        )
-        
-        # Отправляем приветственное сообщение
-        embed = discord.Embed(
-            title="🎮 Клоз создан!",
-            description=(
-                "**Доступно только вам и приглашенным друзьям**\n\n"
-                "**Каналы:**\n"
-                f"• {voice_channel.mention} - голосовой чат\n"
-                f"• {text_channel.mention} - текстовый чат\n\n"
-                "⏰ **Автоматически удалится через 4 часа**\n"
-                "👥 **Чтобы пригласить друзей:**\n"
-                "1. Нажмите на канал правой кнопкой\n"
-                "2. 'Пригласить участников'\n"
-                "3. Выберите друзей"
-            ),
-            color=0x00ff00
-        )
-        embed.set_footer(text="Для досрочного удаления - удалите категорию вручную")
-        
-        await text_channel.send(embed=embed)
-        
-        # Отправляем подтверждение
         await interaction.response.send_message(
-            f"✅ Клоз создан! {category.mention}\n"
-            f"• Удалится автоматически через 4 часа", 
+            f"✅ Полноценный клоз создан! {category.mention}\n"
+            f"• 🟢 Войс для союзников (5 слотов)\n" 
+            f"• 🔴 Войс для противников (5 слотов)\n"
+            f"• 📚 Полезные источники\n"
+            f"• 👥 Панель приглашения\n"
+            f"• ⏰ Удалится через 4 часа", 
             ephemeral=True
         )
-        
-        # Запускаем таймер удаления через 4 часа
-        asyncio.create_task(delete_close_after_delay(category, 4 * 60 * 60))
     
     @discord.ui.button(label='📊 Список команд', style=discord.ButtonStyle.secondary, custom_id='teams_list_btn')
     async def show_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -570,7 +618,7 @@ async def setup_panel(interaction: discord.Interaction):
     
     embed = discord.Embed(title="🎮 Панель управления командами", description="Все инструменты для организации игрового процесса", color=0x9b59b6)
     embed.add_field(name="📝 Регистрация команды", value="Зарегистрируйте команду для доступа ко всем функциям", inline=False)
-    embed.add_field(name="🎮 Создать клоз (4 часа)", value="Приватная комната на 4 часа для игр с друзьями", inline=False)
+    embed.add_field(name="🎮 Создать полноценный клоз", value="Полноценная игровая комната с ролями, войсами и панелями", inline=False)
     embed.add_field(name="📊 Список команд", value="Посмотреть все зарегистрированные команды", inline=False)
     
     await interaction.channel.send(embed=embed, view=MainPanelView())
@@ -618,5 +666,4 @@ flask_thread.start()
 print("✅ Мониторинг запущен на порту 5000")
 
 # ===== ЗАПУСК =====
-bot.run(os.getenv('TOKEN')) 
-
+bot.run(os.getenv('TOKEN'))
