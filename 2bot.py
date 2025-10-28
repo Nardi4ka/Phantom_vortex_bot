@@ -618,4 +618,5 @@ flask_thread.start()
 print("✅ Мониторинг запущен на порту 5000")
 
 # ===== ЗАПУСК =====
-bot.run('')
+bot.run(os.getenv('TOKEN')) 
+
