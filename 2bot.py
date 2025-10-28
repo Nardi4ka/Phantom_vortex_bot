@@ -380,7 +380,7 @@ async def create_full_clash(interaction: discord.Interaction, team_name: str, ca
     # Создаем текстовые каналы
     info_channel = await category.create_text_channel(f"📋-{team_name}-инфо")
     chat_channel = await category.create_text_channel(f"💬-{team_name}-чат")
-    coordination_channel = await category.create_text_channel(f"🎯-координация")
+    coordination_channel = await category.create_text_channel(f"🎯-пригласить-игроков")
     
     # Создаем войс-каналы с ограничением на 5 человек
     ally_voice = await category.create_voice_channel(
@@ -667,3 +667,4 @@ print("✅ Мониторинг запущен на порту 5000")
 
 # ===== ЗАПУСК =====
 bot.run(os.getenv('TOKEN'))
+
