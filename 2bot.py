@@ -28,157 +28,85 @@ bot = MyBot()
 # ===== СИСТЕМА МОДЕРАЦИИ PHANTOM VORTEX =====
 class PhantomVortexModSystem:
     def __init__(self):
-        self.user_warnings = defaultdict(int)
-        self.warning_timestamps = defaultdict(list)
-        self.spam_detection = defaultdict(list)
-    
+        self.advertising_words = [
+            'купить', 'продам', 'реклама', 'подписывайся', 'мой канал',
+            'discord.gg/', 'http://', 'https://', 'бесплатно', 'скидка'
+        ]
+        
+        self.explicit_words = [
+            'секс', 'порно', 'xxx', 'porn', 'onlyfans', 'интим'
+        ]
+        
+        self.threats_words = [
+            'убью', 'зарежу', 'изобью', 'сдохни', 'вешайся', 'суицид'
+        ]
+        
+        self.discrimination_words = [
+            'нигер', 'ниггер', 'чурка', 'хач', 'жид', 'пидорас'
+        ]
+
     async def analyze_message(self, message):
         if message.author.bot:
             return None
         
-        violations = []
-        
-        # Уровень 4: Критические нарушения
-        if await self.check_level4_violations(message):
-            return "LEVEL4"
-        
-        # Уровень 3: Серьезные нарушения
-        if await self.check_level3_violations(message):
-            violations.append("LEVEL3")
-        
-        # Уровень 2: Средние нарушения
-        if await self.check_level2_violations(message):
-            violations.append("LEVEL2")
-        
-        # Уровень 1: Легкие нарушения
-        if await self.check_level1_violations(message):
-            violations.append("LEVEL1")
-        
-        return violations[0] if violations else None
-    
-    async def check_level4_violations(self, message):
         content = message.content.lower()
-        threats = ['убью', 'зарежу', 'изобью', 'вешайся', 'суицид', 'сдохни']
-        discrimination = ['нигер', 'ниггер', 'чурка', 'хач', 'жид', 'пидорас']
         
-        if (any(threat in content for threat in threats) or 
-            any(disc_word in content for disc_word in discrimination) or
-            re.search(r'\b\d{11,}\b', content)):
-            return True
-        return False
-    
-    async def check_level3_violations(self, message):
-        content = message.content.lower()
-        personal_insults = ['мудак', 'мудила', 'дебил', 'долбоёб', 'ублюдок', 'говноед']
-        advertising = ['подписывайся', 'мой канал', 'купить', 'продам', 'реклама']
+        # 🔴 УГРОЗЫ - отправляем модераторам
+        if any(threat in content for threat in self.threats_words):
+            await self.report_to_moderators(message, "УГРОЗА", content)
+            return "REPORT_ONLY"
         
-        if (any(insult in content for insult in personal_insults) or
-            any(ad in content for ad in advertising) or
-            await self.detect_targeted_trolling(message)):
-            return True
-        return False
-    
-    async def check_level2_violations(self, message):
-        content = message.content.lower()
-        nsfw_words = ['секс', 'порно', 'голый', 'обнаженный']
-        cheat_words = ['читы', 'читер', 'взлом', 'паблик чит']
-        mentions = message.mentions + message.role_mentions
+        # 🔴 ДИСКРИМИНАЦИЯ - отправляем модераторам  
+        if any(disc in content for disc in self.discrimination_words):
+            await self.report_to_moderators(message, "ДИСКРИМИНАЦИЯ", content)
+            return "REPORT_ONLY"
         
-        if (any(nsfw in content for nsfw in nsfw_words) or
-            any(cheat in content for cheat in cheat_words) or
-            len(mentions) >= 3):
-            return True
-        return False
-    
-    async def check_level1_violations(self, message):
-        if await self.detect_spam(message) or await self.detect_off_topic(message):
-            return True
-        return False
-    
-    async def detect_spam(self, message):
-        user_id = message.author.id
-        now = datetime.now()
-        self.spam_detection[user_id].append(now)
-        self.spam_detection[user_id] = [t for t in self.spam_detection[user_id] if now - t < timedelta(seconds=10)]
-        return len(self.spam_detection[user_id]) >= 5
-    
-    async def detect_targeted_trolling(self, message):
-        if message.reference:
-            try:
-                replied_msg = await message.channel.fetch_message(message.reference.message_id)
-                if replied_msg.author != message.author:
-                    negative_words = ['дурак', 'идиот', 'тупой', 'слабый']
-                    return any(word in message.content.lower() for word in negative_words)
-            except:
-                pass
-        return False
-    
-    async def detect_off_topic(self, message):
-        channel_name = message.channel.name.lower()
-        if 'музыка' in channel_name and not await self.is_music_related(message.content):
-            return True
-        return False
-    
-    async def is_music_related(self, content):
-        music_words = ['песня', 'трек', 'альбом', 'музыка', 'слушать']
-        return any(word in content.lower() for word in music_words)
-    
-    async def apply_punishment(self, user, violation_level, channel, reason=""):
-        user_id = user.id
-        now = datetime.now()
+        # 🔵 АВТОМОДЕРАЦИЯ: Только реклама и плохие слова
+        if any(ad in content for ad in self.advertising_words):
+            return "ADVERTISING"
+            
+        if any(explicit in content for explicit in self.explicit_words):
+            return "EXPLICIT"
+            
+        return None  # ✅ @everyone и массовые упоминания НЕ наказываются
+
+    async def report_to_moderators(self, message, violation_type, content):
+        """Отправляет репорт модераторам"""
+        mod_channel = discord.utils.get(message.guild.channels, name="🛡️-репорты-модерации")
+        if not mod_channel:
+            overwrites = {
+                message.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                message.guild.me: discord.PermissionOverwrite(read_messages=True)
+            }
+            for role in message.guild.roles:
+                if role.permissions.manage_messages or role.permissions.administrator:
+                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            
+            mod_channel = await message.guild.create_text_channel("🛡️-репорты-модерации", overwrites=overwrites)
         
-        self.warning_timestamps[user_id].append(now)
-        self.warning_timestamps[user_id] = [t for t in self.warning_timestamps[user_id] if now - t < timedelta(days=10)]
-        active_warns = len(self.warning_timestamps[user_id])
+        embed = discord.Embed(
+            title=f"🚨 Требуется проверка: {violation_type}",
+            color=0xff9900,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="Автор", value=message.author.mention, inline=True)
+        embed.add_field(name="Канал", value=message.channel.mention, inline=True)
+        embed.add_field(name="Тип", value=violation_type, inline=True)
+        embed.add_field(name="Сообщение", value=f"```{content[:500]}```", inline=False)
         
-        log_channel = discord.utils.get(channel.guild.channels, name="📋-логи-модерации")
-        if not log_channel:
-            overwrites = {channel.guild.default_role: discord.PermissionOverwrite(read_messages=False)}
-            log_channel = await channel.guild.create_text_channel("📋-логи-модерации", overwrites=overwrites)
+        await mod_channel.send(embed=embed)
+        await mod_channel.send("@here")
+
+    async def apply_punishment(self, user, violation_type, channel, reason=""):
+        """Только для автоматических нарушений"""
+        if violation_type in ["REPORT_ONLY"]:
+            return  # Не наказываем, только репорт
+            
+        if violation_type == "ADVERTISING":
+            await channel.send(f"🚫 {user.mention} реклама запрещена! Сообщение удалено.")
         
-        embed = discord.Embed(title="🚨 Нарушение правил", color=0xe74c3c, timestamp=now)
-        embed.add_field(name="Участник", value=user.mention, inline=True)
-        embed.add_field(name="Уровень", value=violation_level, inline=True)
-        embed.add_field(name="Активные варны", value=f"{active_warns}/3", inline=True)
-        embed.add_field(name="Причина", value=reason or "Автомодерация", inline=False)
-        
-        if violation_level == "LEVEL4":
-            try:
-                await user.ban(reason=f"Критическое нарушение: {reason}")
-                embed.add_field(name="Наказание", value="🔨 Пермабан", inline=False)
-            except:
-                embed.add_field(name="Ошибка", value="Не удалось забанить", inline=False)
-        
-        elif violation_level == "LEVEL3":
-            for _ in range(2):
-                self.warning_timestamps[user_id].append(now)
-            try:
-                await user.timeout(timedelta(days=3), reason=f"Серьезное нарушение: {reason}")
-                embed.add_field(name="Наказание", value="🔇 Мут 3 дня + 2 варна", inline=False)
-            except:
-                embed.add_field(name="Наказание", value="2 варна", inline=False)
-        
-        elif violation_level == "LEVEL2":
-            try:
-                await user.timeout(timedelta(hours=6), reason=f"Среднее нарушение: {reason}")
-                embed.add_field(name="Наказание", value="🔇 Мут 6 часов + варн", inline=False)
-            except:
-                embed.add_field(name="Наказание", value="1 варн", inline=False)
-        
-        elif violation_level == "LEVEL1":
-            embed.add_field(name="Наказание", value="⚠️ Предупреждение", inline=False)
-        
-        if active_warns >= 3:
-            try:
-                await user.ban(reason="Автобан: 3 активных предупреждения")
-                embed.add_field(name="🔨 Автобан", value="3 активных варна", inline=False)
-            except:
-                pass
-        
-        await log_channel.send(embed=embed)
-        
-        if violation_level in ["LEVEL2", "LEVEL3", "LEVEL4"]:
-            await channel.send(f"🚨 {user.mention} получил наказание. Детали в {log_channel.mention}")
+        elif violation_type == "EXPLICIT":
+            await channel.send(f"🚫 {user.mention} контент 18+ запрещен! Сообщение удалено.")
 
 mod_system = PhantomVortexModSystem()
 
@@ -196,30 +124,7 @@ def save_teams():
     with open('teams.json', 'w', encoding='utf-8') as f:
         json.dump(registered_teams, f, ensure_ascii=False, indent=2)
 
-def migrate_teams_data():
-    """Конвертирует старые данные в новый формат"""
-    global registered_teams
-    migrated = False
-    
-    for user_id, data in list(registered_teams.items()):
-        if isinstance(data, str):  # Старый формат
-            registered_teams[user_id] = {
-                'team_name': data,
-                'captain': 'Не указан',
-                'game': 'dota 2'
-            }
-            migrated = True
-        elif isinstance(data, dict) and 'game' not in data:
-            registered_teams[user_id]['game'] = 'dota 2'
-            registered_teams[user_id]['captain'] = data.get('captain', 'Не указан')
-            migrated = True
-    
-    if migrated:
-        save_teams()
-        print("✅ Данные мигрированы в новый формат")
-
 registered_teams = load_teams()
-migrate_teams_data()
 
 # ===== СИСТЕМА ПРИГЛАШЕНИЙ =====
 class TeamMemberSelect(discord.ui.UserSelect):
@@ -304,7 +209,6 @@ class RegistrationModal(discord.ui.Modal, title='📝 Регистрация к�
     async def on_submit(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
         
-        # Проверяем корректность выбора игры
         game = self.game_choice.value.strip().lower()
         if game not in ['dota 2', 'cs2']:
             await interaction.response.send_message(
@@ -320,7 +224,6 @@ class RegistrationModal(discord.ui.Modal, title='📝 Регистрация к�
             )
             return
         
-        # Сохраняем данные команды
         registered_teams[user_id] = {
             'team_name': self.team_name.value,
             'captain': self.captain_name.value,
@@ -339,9 +242,6 @@ class RegistrationModal(discord.ui.Modal, title='📝 Регистрация к�
 
 # ===== ФУНКЦИЯ СОЗДАНИЯ ПОЛНОЦЕННОГО КЛОЗА =====
 async def create_full_clash(interaction: discord.Interaction, team_name: str, captain_name: str, game_type: str):
-    """Создает полноценный клоз с ролями, войсами и панелями"""
-    
-    # Форматируем название категории по игре и нику капитана
     game_display_names = {
         "dota 2": "Dota 2",
         "cs2": "CS2"
@@ -350,7 +250,6 @@ async def create_full_clash(interaction: discord.Interaction, team_name: str, ca
     game_display = game_display_names.get(game_type.lower(), game_type.upper())
     category_name = f"🎮 {game_display} | {captain_name}"
     
-    # Создаем уникальные роли для клоза
     team_role = await interaction.guild.create_role(
         name=f"👥 {team_name}",
         color=discord.Color.green(),
@@ -363,7 +262,6 @@ async def create_full_clash(interaction: discord.Interaction, team_name: str, ca
         hoist=True
     )
     
-    # Настройки прав доступа
     overwrites = {
         interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False, connect=False),
         team_role: discord.PermissionOverwrite(read_messages=True, connect=True, send_messages=True),
@@ -371,29 +269,27 @@ async def create_full_clash(interaction: discord.Interaction, team_name: str, ca
         interaction.guild.me: discord.PermissionOverwrite(read_messages=True, connect=True, send_messages=True)
     }
     
-    # Создаем категорию
     category = await interaction.guild.create_category(
         name=category_name,
         overwrites=overwrites
     )
     
-    # Создаем текстовые каналы
-info_channel = await category.create_text_channel(f"📋-{team_name}-инфо")
-chat_channel = await category.create_text_channel(f"💬-{team_name}-чат")
-invite_channel = await category.create_text_channel(f"📩-приглашения")  # ← НОВОЕ НАЗВАНИЕ
-
-# Создаем войс-каналы
-ally_voice = await category.create_voice_channel(f"🟢-союзники-{team_name}", user_limit=5)
-enemy_voice = await category.create_voice_channel(f"🔴-противники-{team_name}", user_limit=5)
-
-# ОТПРАВЛЯЕМ ПАНЕЛЬ В ПРАВИЛЬНЫЙ КАНАЛ:
-await invite_channel.send(embed=invite_embed, view=ClashInviteView(team_role.id, opponent_role_id, team_name))
+    info_channel = await category.create_text_channel(f"📋-{team_name}-инфо")
+    chat_channel = await category.create_text_channel(f"💬-{team_name}-чат")
+    invite_channel = await category.create_text_channel(f"📩-приглашения")
+    
+    ally_voice = await category.create_voice_channel(
+        name=f"🟢-союзники-{team_name}",
+        user_limit=5
     )
     
-    # Добавляем капитана в роль команды
+    enemy_voice = await category.create_voice_channel(
+        name=f"🔴-противники-{team_name}",
+        user_limit=5
+    )
+    
     await interaction.user.add_roles(team_role)
     
-    # Отправляем панель приглашения в канал координации
     invite_embed = discord.Embed(
         title=f"🎮 Панель управления клозом {team_name}",
         description="Используйте кнопки ниже для приглашения участников",
@@ -403,9 +299,8 @@ await invite_channel.send(embed=invite_embed, view=ClashInviteView(team_role.id,
     invite_embed.add_field(name="🔴 Противники", value="Команда оппонентов", inline=True)
     invite_embed.add_field(name="🎮 Игра", value=game_display, inline=True)
     
-    await coordination_channel.send(embed=invite_embed, view=ClashInviteView(team_role.id, opponent_role.id, team_name))
+    await invite_channel.send(embed=invite_embed, view=ClashInviteView(team_role.id, opponent_role.id, team_name))
     
-    # Отправляем информационное сообщение с источниками
     sources_embed = discord.Embed(
         title="📚 Полезные источники",
         color=0x3498db
@@ -429,38 +324,30 @@ await invite_channel.send(embed=invite_embed, view=ClashInviteView(team_role.id,
     sources_message = await info_channel.send(embed=sources_embed)
     await sources_message.pin()
     
-    # Запускаем таймер удаления через 4 часа
     asyncio.create_task(delete_close_after_delay(category, 4 * 60 * 60))
     
     return category
 
-# ===== ФУНКЦИЯ АВТОУДАЛЕНИЯ КЛОЗОВ ЧЕРЕЗ 4 ЧАСА =====
+# ===== ФУНКЦИЯ АВТОУДАЛЕНИЯ КЛОЗОВ =====
 async def delete_close_after_delay(category, delay_seconds):
-    """Удаляет клоз через указанное время"""
     await asyncio.sleep(delay_seconds)
     
     try:
-        # Удаляем все роли связанные с клозом
         for role in category.guild.roles:
             if "👥" in role.name or "⚔️" in role.name:
-                # Проверяем что роль принадлежит этому клозу
                 role_team_name = role.name.split(' ', 1)[1] if ' ' in role.name else role.name
                 if role_team_name in category.name:
                     await role.delete()
         
-        # Удаляем все каналы в категории
         for channel in category.channels:
             await channel.delete()
         
-        # Удаляем саму категорию
         await category.delete()
         
-    except discord.NotFound:
-        pass  # Категория уже удалена
     except Exception as e:
         print(f"❌ Ошибка удаления клоза: {e}")
 
-# ===== ОСНОВНАЯ ПАНЕЛЬ С КЛОЗАМИ =====
+# ===== ОСНОВНАЯ ПАНЕЛЬ =====
 class MainPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -473,7 +360,6 @@ class MainPanelView(discord.ui.View):
     async def create_full_clash(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
         
-        # Проверяем регистрацию
         if user_id not in registered_teams:
             await interaction.response.send_message(
                 "❌ Сначала зарегистрируйте команду через кнопку '📝 Регистрация команды'!", 
@@ -483,17 +369,15 @@ class MainPanelView(discord.ui.View):
         
         team_data = registered_teams[user_id]
         
-        # Проверяем лимит клозов (2 на пользователя)
         user_closes = sum(1 for category in interaction.guild.categories 
                          if f"🎮 {interaction.user.display_name}" in category.name)
         if user_closes >= 2:
             await interaction.response.send_message(
-                "❌ У вас уже есть 2 активных клоза! Дождитесь их удаления.", 
+                "❌ У вас уже есть 2 активных клозов! Дождитесь их удаления.", 
                 ephemeral=True
             )
             return
         
-        # Создаем полноценный клоз
         category = await create_full_clash(
             interaction, 
             team_data['team_name'],
@@ -528,71 +412,6 @@ class MainPanelView(discord.ui.View):
         embed.add_field(name="📈 Статистика:", value=f"Всего команд: **{len(registered_teams)}**", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ===== ПАНЕЛЬ МОДЕРАЦИИ =====
-class AdminPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    
-    @discord.ui.button(label='👁️ Просмотреть заявки', style=discord.ButtonStyle.primary, custom_id='view_apps_btn')
-    async def view_applications(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not registered_teams:
-            await interaction.response.send_message("❌ Нет зарегистрированных команд.", ephemeral=True)
-            return
-        
-        embed = discord.Embed(title="📋 Все зарегистрированные команды", color=0x3498db)
-        for user_id, team_data in registered_teams.items():
-            user = await bot.fetch_user(int(user_id))
-            username = user.name if user else "Неизвестный"
-            embed.add_field(
-                name=f"🏷️ {team_data['team_name']} ({team_data['game'].upper()})", 
-                value=f"Капитан: {username}", 
-                inline=False
-            )
-        
-        embed.set_footer(text=f"Всего команд: {len(registered_teams)}")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    
-    @discord.ui.button(label='📤 Экспорт в файл', style=discord.ButtonStyle.secondary, custom_id='export_btn')
-    async def export_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not registered_teams:
-            await interaction.response.send_message("❌ Нет данных для экспорта.", ephemeral=True)
-            return
-        
-        filename = f"teams_export_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
-        with open(filename, 'w', encoding='utf-8') as f:
-            for user_id, team_data in registered_teams.items():
-                user = await bot.fetch_user(int(user_id))
-                username = user.name if user else "Неизвестный"
-                f.write(f"Команда: {team_data['team_name']} | Игра: {team_data['game']} | Капитан: {username}\n")
-        
-        await interaction.response.send_message(file=discord.File(filename), ephemeral=True)
-        os.remove(filename)
-    
-    @discord.ui.button(label='🗑️ Очистить заявки', style=discord.ButtonStyle.danger, custom_id='clear_btn')
-    async def clear_all(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not registered_teams:
-            await interaction.response.send_message("❌ Нет данных для очистки.", ephemeral=True)
-            return
-        
-        confirm_view = ConfirmClearView()
-        await interaction.response.send_message("⚠️ Удалить ВСЕ зарегистрированные команды?", view=confirm_view, ephemeral=True)
-
-class ConfirmClearView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=30)
-    
-    @discord.ui.button(label='✅ Да', style=discord.ButtonStyle.danger)
-    async def confirm_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
-        global registered_teams
-        count = len(registered_teams)
-        registered_teams = {}
-        save_teams()
-        await interaction.response.send_message(f"✅ Удалено {count} команд!", ephemeral=True)
-    
-    @discord.ui.button(label='❌ Нет', style=discord.ButtonStyle.secondary)
-    async def cancel_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("❌ Очистка отменена.", ephemeral=True)
-
 # ===== ОБРАБОТЧИКИ СОБЫТИЙ =====
 @bot.event
 async def on_ready():
@@ -605,6 +424,8 @@ async def on_message(message):
     if violation:
         await message.delete()
         await mod_system.apply_punishment(message.author, violation, message.channel)
+    
+    await bot.process_commands(message)
 
 # ===== КОМАНДЫ =====
 @bot.tree.command(name="panel", description="📊 Установить панель для игроков")
@@ -620,32 +441,6 @@ async def setup_panel(interaction: discord.Interaction):
     
     await interaction.channel.send(embed=embed, view=MainPanelView())
     await interaction.response.send_message("✅ Панель установлена!", ephemeral=True)
-
-@bot.tree.command(name="modpanel", description="🛠️ Панель модерации")
-@app_commands.checks.has_permissions(administrator=True)
-async def admin_panel(interaction: discord.Interaction):
-    embed = discord.Embed(title="🛠️ Панель модерации", description="Инструменты для управления заявками", color=0xe74c3c)
-    embed.add_field(name="👁️ Просмотреть заявки", value="Список всех зарегистрированных команд", inline=False)
-    embed.add_field(name="📤 Экспорт в файл", value="Скачать список команд", inline=False)
-    embed.add_field(name="🗑️ Очистить заявки", value="Полная очистка базы", inline=False)
-    
-    await interaction.channel.send(embed=embed, view=AdminPanelView())
-    await interaction.response.send_message("✅ Панель модерации установлена!", ephemeral=True)
-
-@bot.tree.command(name="warn", description="Выдать предупреждение")
-@app_commands.checks.has_permissions(manage_messages=True)
-async def warn_user(interaction: discord.Interaction, пользователь: discord.Member, причина: str):
-    await mod_system.apply_punishment(пользователь, "LEVEL1", interaction.channel, причина)
-    await interaction.response.send_message(f"✅ {пользователь.mention} получил предупреждение", ephemeral=True)
-
-@bot.tree.command(name="clear_warns", description="Сбросить предупреждения")
-@app_commands.checks.has_permissions(administrator=True)
-async def clear_warnings(interaction: discord.Interaction, пользователь: discord.Member):
-    user_id = пользователь.id
-    mod_system.warning_timestamps[user_id] = []
-    embed = discord.Embed(title="✅ Предупреждения сброшены", color=0x2ecc71)
-    embed.add_field(name="Участник", value=пользователь.mention, inline=True)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ===== МОНИТОРИНГ =====
 app = Flask(__name__)
@@ -664,6 +459,7 @@ print("✅ Мониторинг запущен на порту 5000")
 
 # ===== ЗАПУСК =====
 bot.run(os.getenv('TOKEN'))
+
 
 
 
