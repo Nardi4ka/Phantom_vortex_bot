@@ -1,3 +1,46 @@
 {
-  "936655628066254849": "дети детей"
+  # ===== СИСТЕМА СОХРАНЕНИЯ КОМАНД =====
+def load_teams():
+    if os.path.exists('teams.json'):
+        try:
+            with open('teams.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+            # Проверяем и исправляем формат данных
+            fixed_data = {}
+            for key, value in data.items():
+                if isinstance(value, dict) and 'team_name' in value:
+                    # Правильный формат
+                    fixed_data[key] = value
+                elif isinstance(value, str):
+                    # Старый формат - конвертируем в новый
+                    fixed_data[key] = {
+                        'team_name': value,
+                        'captain': 'Не указан',
+                        'game': 'dota 2'
+                    }
+                else:
+                    # Неизвестный формат - пропускаем
+                    continue
+                    
+            print(f"✅ Загружено {len(fixed_data)} команд (исправлен формат)")
+            return fixed_data
+            
+        except Exception as e:
+            print(f"❌ Ошибка загрузки teams.json: {e}")
+            return {}
+    return {}
+
+def save_teams():
+    try:
+        with open('teams.json', 'w', encoding='utf-8') as f:
+            json.dump(registered_teams, f, ensure_ascii=False, indent=2)
+        print(f"✅ Сохранено {len(registered_teams)} команд")
+    except Exception as e:
+        print(f"❌ Ошибка сохранения teams.json: {e}")
+
+# Инициализируем с проверкой
+registered_teams = load_teams()
+print(f"📊 В памяти: {len(registered_teams)} команд")
+
 }
