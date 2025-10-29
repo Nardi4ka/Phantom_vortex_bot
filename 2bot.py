@@ -68,7 +68,7 @@ class PhantomVortexModSystem:
         if any(explicit in content for explicit in self.explicit_words):
             return "EXPLICIT"
             
-        return None
+        return None  # ✅ @everyone и массовые упоминания НЕ наказываются
 
     async def report_to_moderators(self, message, violation_type, content):
         """Отправляет репорт модераторам"""
@@ -100,7 +100,7 @@ class PhantomVortexModSystem:
     async def apply_punishment(self, user, violation_type, channel, reason=""):
         """Только для автоматических нарушений"""
         if violation_type in ["REPORT_ONLY"]:
-            return
+            return  # Не наказываем, только репорт
             
         if violation_type == "ADVERTISING":
             await channel.send(f"🚫 {user.mention} реклама запрещена! Сообщение удалено.")
@@ -112,17 +112,36 @@ mod_system = PhantomVortexModSystem()
 
 # ===== СИСТЕМА СОХРАНЕНИЯ КОМАНД =====
 def load_teams():
-    if os.path.exists('teams.json'):
-        try:
+    try:
+        if os.path.exists('teams.json'):
             with open('teams.json', 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return {}
+                data = json.load(f)
+                
+            # АВТОМАТИЧЕСКОЕ ИСПРАВЛЕНИЕ ФОРМАТА
+            fixed_data = {}
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    fixed_data[key] = value
+                elif isinstance(value, str):
+                    fixed_data[key] = {
+                        'team_name': value,
+                        'captain': 'Не указан', 
+                        'game': 'dota 2'
+                    }
+                    
+            print(f"✅ Загружено {len(fixed_data)} команд")
+            return fixed_data
+    except Exception as e:
+        print(f"❌ Ошибка загрузки teams.json: {e}")
     return {}
 
 def save_teams():
-    with open('teams.json', 'w', encoding='utf-8') as f:
-        json.dump(registered_teams, f, ensure_ascii=False, indent=2)
+    try:
+        with open('teams.json', 'w', encoding='utf-8') as f:
+            json.dump(registered_teams, f, ensure_ascii=False, indent=2)
+        print(f"✅ Сохранено {len(registered_teams)} команд")
+    except Exception as e:
+        print(f"❌ Ошибка сохранения teams.json: {e}")
 
 registered_teams = load_teams()
 
@@ -240,71 +259,47 @@ class RegistrationModal(discord.ui.Modal, title='📝 Регистрация к�
         embed.add_field(name="🎮 Игра:", value=game.upper(), inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ===== ФУНКЦИЯ СОЗДАНИЯ ПОЛНОЦЕННОГО КЛОЗА =====
-async def create_full_clash(interaction: discord.Interaction, team_name: str, captain_name: str, game_type: str):
-    game_display_names = {
-        "dota 2": "Dota 2",
-        "cs2": "CS2"
-    }
+# ===== ФУНКЦИЯ СОЗДАНИЯ КЛОЗА С ИСТОЧНИКАМИ =====
+async def create_clash(interaction: discord.Interaction, button: discord.ui.Button):
+    user_id = str(interaction.user.id)
     
-    game_display = game_display_names.get(game_type.lower(), game_type.upper())
-    category_name = f"🎮 {game_display} | {captain_name}"
+    # Проверяем лимит клозов (2 на пользователя)
+    user_closes = sum(1 for category in interaction.guild.categories 
+                     if f"🎮 {interaction.user.name}" in category.name)
+    if user_closes >= 2:
+        await interaction.response.send_message(
+            "❌ У вас уже есть 2 активных клоза! Дождитесь их удаления.", 
+            ephemeral=True
+        )
+        return
     
-    team_role = await interaction.guild.create_role(
-        name=f"👥 {team_name}",
-        color=discord.Color.green(),
-        hoist=True
-    )
+    # Получаем данные команды
+    team_data = registered_teams.get(user_id, {})
+    team_name = team_data.get('team_name', 'Неизвестно')
+    game_type = team_data.get('game', 'dota 2')
     
-    opponent_role = await interaction.guild.create_role(
-        name=f"⚔️ {team_name}",
-        color=discord.Color.red(),
-        hoist=True
-    )
-    
+    # Создаем приватные каналы
     overwrites = {
-        interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False, connect=False),
-        team_role: discord.PermissionOverwrite(read_messages=True, connect=True, send_messages=True),
-        opponent_role: discord.PermissionOverwrite(read_messages=True, connect=True, send_messages=True),
-        interaction.guild.me: discord.PermissionOverwrite(read_messages=True, connect=True, send_messages=True)
+        interaction.guild.default_role: discord.PermissionOverwrite(connect=False, read_messages=False),
+        interaction.user: discord.PermissionOverwrite(connect=True, read_messages=True, send_messages=True),
+        interaction.guild.me: discord.PermissionOverwrite(connect=True, read_messages=True, send_messages=True)
     }
     
-    category = await interaction.guild.create_category(
+    # Создаем категорию
+    category_name = f"🎮 {interaction.user.name} | 4h"
+    category = await interaction.guild.create_category_channel(
         name=category_name,
-        overwrites=overwrites
+        overwrites=overwrites,
+        position=0
     )
     
-    info_channel = await category.create_text_channel(f"📋-{team_name}-инфо")
-    chat_channel = await category.create_text_channel(f"💬-{team_name}-чат")
-    invite_channel = await category.create_text_channel(f"📩-приглашения")
+    # Создаем каналы
+    voice_channel = await category.create_voice_channel(name="🔊 Голосовой чат", user_limit=10)
+    text_channel = await category.create_text_channel(name="💬 Общий чат")
+    info_channel = await category.create_text_channel(name="📚 Полезные источники")
     
-    ally_voice = await category.create_voice_channel(
-        name=f"🟢-союзники-{team_name}",
-        user_limit=5
-    )
-    
-    enemy_voice = await category.create_voice_channel(
-        name=f"🔴-противники-{team_name}",
-        user_limit=5
-    )
-    
-    await interaction.user.add_roles(team_role)
-    
-    invite_embed = discord.Embed(
-        title=f"🎮 Панель управления клозом {team_name}",
-        description="Используйте кнопки ниже для приглашения участников",
-        color=0x9b59b6
-    )
-    invite_embed.add_field(name="🟢 Союзники", value="Ваша команда", inline=True)
-    invite_embed.add_field(name="🔴 Противники", value="Команда оппонентов", inline=True)
-    invite_embed.add_field(name="🎮 Игра", value=game_display, inline=True)
-    
-    await invite_channel.send(embed=invite_embed, view=ClashInviteView(team_role.id, opponent_role.id, team_name))
-    
-    sources_embed = discord.Embed(
-        title="📚 Полезные источники",
-        color=0x3498db
-    )
+    # Добавляем источники в зависимости от игры
+    sources_embed = discord.Embed(title="📚 Полезные источники", color=0x3498db)
     
     if game_type.lower() == "dota 2":
         sources_embed.description = "**Для Dota 2:**"
@@ -324,26 +319,58 @@ async def create_full_clash(interaction: discord.Interaction, team_name: str, ca
     sources_message = await info_channel.send(embed=sources_embed)
     await sources_message.pin()
     
-    asyncio.create_task(delete_close_after_delay(category, 4 * 60 * 60))
+    # Отправляем приветственное сообщение
+    embed = discord.Embed(
+        title="🎮 Клоз создан!",
+        description=(
+            "**Доступно только вам и приглашенным друзьям**\n\n"
+            "**Каналы:**\n"
+            f"• {voice_channel.mention} - голосовой чат\n"
+            f"• {text_channel.mention} - текстовый чат\n"
+            f"• {info_channel.mention} - полезные источники\n\n"
+            "⏰ **Автоматически удалится через 4 часа**\n"
+            "👥 **Чтобы пригласить друзей:**\n"
+            "1. Нажмите на канал правой кнопкой\n"
+            "2. 'Пригласить участников'\n"
+            "3. Выберите друзей"
+        ),
+        color=0x00ff00
+    )
     
-    return category
+    await text_channel.send(embed=embed)
+    
+    # Отправляем подтверждение
+    await interaction.response.send_message(
+        f"✅ Клоз создан! {category.mention}\n"
+        f"• Удалится автоматически через 4 часа", 
+        ephemeral=True
+    )
+    
+    # Запускаем таймер удаления через 4 часа
+    asyncio.create_task(delete_close_after_delay(category, 4 * 60 * 60))
 
 # ===== ФУНКЦИЯ АВТОУДАЛЕНИЯ КЛОЗОВ =====
 async def delete_close_after_delay(category, delay_seconds):
     await asyncio.sleep(delay_seconds)
     
     try:
-        for role in category.guild.roles:
-            if "👥" in role.name or "⚔️" in role.name:
-                role_team_name = role.name.split(' ', 1)[1] if ' ' in role.name else role.name
-                if role_team_name in category.name:
-                    await role.delete()
-        
+        # Проверяем, пустые ли каналы
+        empty = True
         for channel in category.channels:
-            await channel.delete()
+            if isinstance(channel, discord.VoiceChannel) and len(channel.members) > 0:
+                empty = False
+                break
         
-        await category.delete()
-        
+        if empty:
+            # Удаляем все каналы в категории
+            for channel in category.channels:
+                await channel.delete()
+            await category.delete()
+        else:
+            # Если есть люди - проверяем еще через 1 час
+            asyncio.create_task(delete_close_after_delay(category, 3600))
+    except discord.NotFound:
+        pass  # Категория уже удалена
     except Exception as e:
         print(f"❌ Ошибка удаления клоза: {e}")
 
@@ -352,61 +379,37 @@ class MainPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label='📝 Регистрация команды', style=discord.ButtonStyle.primary, custom_id='phantom_register_1')
+    @discord.ui.button(label='📝 Регистрация команды', style=discord.ButtonStyle.primary, custom_id='register_btn')
     async def register_team(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await interaction.response.send_modal(RegistrationModal())
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Ошибка открытия формы: {e}", ephemeral=True)
+        await interaction.response.send_modal(RegistrationModal())
     
-    @discord.ui.button(label='🎮 Создать полноценный клоз', style=discord.ButtonStyle.success, custom_id='phantom_create_2')
-    async def create_full_clash(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            user_id = str(interaction.user.id)
-            
-            if user_id not in registered_teams:
-                await interaction.response.send_message("❌ Сначала зарегистрируйте команду!", ephemeral=True)
-                return
-            
-            team_data = registered_teams[user_id]
-            
-            # Создаем клоз
-            category = await create_full_clash(interaction, team_data['team_name'], team_data['captain'], team_data['game'])
-            
-            await interaction.response.send_message(f"✅ Полноценный клоз создан! {category.mention}", ephemeral=True)
-            
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Ошибка: {str(e)}", ephemeral=True)
+    @discord.ui.button(label='🎮 Создать клоз ', style=discord.ButtonStyle.success, custom_id='create_clash_btn')
+    async def create_clash(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await create_clash(interaction, button)
     
-    @discord.ui.button(label='📊 Список команд', style=discord.ButtonStyle.secondary, custom_id='phantom_list_3')
+    @discord.ui.button(label='📊 Список команд', style=discord.ButtonStyle.secondary, custom_id='teams_list_btn')
     async def show_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            if not registered_teams:
-                await interaction.response.send_message("📊 Пока никто не зарегистрировался", ephemeral=True)
-                return
-            
-            teams_text = ""
-            for user_id, team_data in registered_teams.items():
-                user = await bot.fetch_user(int(user_id))
-                username = user.name if user else "Неизвестный"
-                teams_text += f"• **{team_data['team_name']}** ({team_data['game'].upper()}) - {username}\n"
-            
-            embed = discord.Embed(
-                title="📊 Зарегистрированные команды",
-                description=teams_text,
-                color=0x2ecc71
-            )
+        if not registered_teams:
+            embed = discord.Embed(title="📊 Список команд", description="Пока никто не зарегистрировался", color=0xf39c12)
             await interaction.response.send_message(embed=embed, ephemeral=True)
-            
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Ошибка: {e}", ephemeral=True)
+            return
+        
+        teams_list = ""
+        for user_id, team_data in registered_teams.items():
+            user = await bot.fetch_user(int(user_id))
+            username = user.name if user else "Неизвестный"
+            teams_list += f"• **{team_data['team_name']}** ({team_data['game'].upper()}) - {username}\n"
+        
+        embed = discord.Embed(title="📊 Зарегистрированные команды", description=teams_list, color=0x2ecc71)
+        embed.add_field(name="📈 Статистика:", value=f"Всего команд: **{len(registered_teams)}**", inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ===== ПАНЕЛЬ МОДЕРАЦИИ =====
 class AdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label='👁️ Просмотреть заявки', style=discord.ButtonStyle.primary, custom_id='admin_view_1')
+    @discord.ui.button(label='👁️ Просмотреть заявки', style=discord.ButtonStyle.primary, custom_id='view_apps_btn')
     async def view_applications(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not registered_teams:
             await interaction.response.send_message("❌ Нет зарегистрированных команд.", ephemeral=True)
@@ -425,7 +428,7 @@ class AdminPanelView(discord.ui.View):
         embed.set_footer(text=f"Всего команд: {len(registered_teams)}")
         await interaction.response.send_message(embed=embed, ephemeral=True)
     
-    @discord.ui.button(label='📤 Экспорт в файл', style=discord.ButtonStyle.secondary, custom_id='admin_export_2')
+    @discord.ui.button(label='📤 Экспорт в файл', style=discord.ButtonStyle.secondary, custom_id='export_btn')
     async def export_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not registered_teams:
             await interaction.response.send_message("❌ Нет данных для экспорта.", ephemeral=True)
@@ -441,7 +444,7 @@ class AdminPanelView(discord.ui.View):
         await interaction.response.send_message(file=discord.File(filename), ephemeral=True)
         os.remove(filename)
     
-    @discord.ui.button(label='🗑️ Очистить заявки', style=discord.ButtonStyle.danger, custom_id='admin_clear_3')
+    @discord.ui.button(label='🗑️ Очистить заявки', style=discord.ButtonStyle.danger, custom_id='clear_btn')
     async def clear_all(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not registered_teams:
             await interaction.response.send_message("❌ Нет данных для очистки.", ephemeral=True)
@@ -490,7 +493,7 @@ async def setup_panel(interaction: discord.Interaction):
     
     embed = discord.Embed(title="🎮 Панель управления командами", description="Все инструменты для организации игрового процесса", color=0x9b59b6)
     embed.add_field(name="📝 Регистрация команды", value="Зарегистрируйте команду для доступа ко всем функциям", inline=False)
-    embed.add_field(name="🎮 Создать полноценный клоз", value="Полноценная игровая комната с ролями, войсами и панелями", inline=False)
+    embed.add_field(name="🎮 Создать клоз ", value="Приватная комната на 4 часа для игр с друзьями", inline=False)
     embed.add_field(name="📊 Список команд", value="Посмотреть все зарегистрированные команды", inline=False)
     
     await interaction.channel.send(embed=embed, view=MainPanelView())
