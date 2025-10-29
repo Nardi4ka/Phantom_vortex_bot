@@ -68,7 +68,7 @@ class PhantomVortexModSystem:
         if any(explicit in content for explicit in self.explicit_words):
             return "EXPLICIT"
             
-        return None  # ✅ @everyone и массовые упоминания НЕ наказываются
+        return None
 
     async def report_to_moderators(self, message, violation_type, content):
         """Отправляет репорт модераторам"""
@@ -100,7 +100,7 @@ class PhantomVortexModSystem:
     async def apply_punishment(self, user, violation_type, channel, reason=""):
         """Только для автоматических нарушений"""
         if violation_type in ["REPORT_ONLY"]:
-            return  # Не наказываем, только репорт
+            return
             
         if violation_type == "ADVERTISING":
             await channel.send(f"🚫 {user.mention} реклама запрещена! Сообщение удалено.")
@@ -352,63 +352,119 @@ class MainPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label='📝 Регистрация команды', style=discord.ButtonStyle.primary, custom_id='main_register_btn')
+    @discord.ui.button(label='📝 Регистрация команды', style=discord.ButtonStyle.primary, custom_id='phantom_register_1')
     async def register_team(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RegistrationModal())
+        try:
+            await interaction.response.send_modal(RegistrationModal())
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Ошибка открытия формы: {e}", ephemeral=True)
     
-    @discord.ui.button(label='🎮 Создать полноценный клоз', style=discord.ButtonStyle.success, custom_id='main_create_clash_btn')
+    @discord.ui.button(label='🎮 Создать полноценный клоз', style=discord.ButtonStyle.success, custom_id='phantom_create_2')
     async def create_full_clash(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             user_id = str(interaction.user.id)
             
             if user_id not in registered_teams:
-                await interaction.response.send_message(
-                    "❌ Сначала зарегистрируйте команду!", 
-                    ephemeral=True
-                )
+                await interaction.response.send_message("❌ Сначала зарегистрируйте команду!", ephemeral=True)
                 return
             
             team_data = registered_teams[user_id]
             
-            # Проверяем лимит клозов
-            user_categories = [c for c in interaction.guild.categories if interaction.user.display_name in c.name]
-            if len(user_categories) >= 2:
-                await interaction.response.send_message(
-                    "❌ У вас уже есть 2 активных клоза!", 
-                    ephemeral=True
-                )
-                return
-            
             # Создаем клоз
-            category = await create_full_clash(
-                interaction, 
-                team_data['team_name'],
-                team_data['captain'], 
-                team_data['game']
-            )
+            category = await create_full_clash(interaction, team_data['team_name'], team_data['captain'], team_data['game'])
             
-            await interaction.response.send_message(
-                f"✅ Полноценный клоз создан! {category.mention}", 
-                ephemeral=True
-            )
+            await interaction.response.send_message(f"✅ Полноценный клоз создан! {category.mention}", ephemeral=True)
             
         except Exception as e:
             await interaction.response.send_message(f"❌ Ошибка: {str(e)}", ephemeral=True)
     
-    @discord.ui.button(label='📊 Список команд', style=discord.ButtonStyle.secondary, custom_id='main_list_teams_btn')
+    @discord.ui.button(label='📊 Список команд', style=discord.ButtonStyle.secondary, custom_id='phantom_list_3')
     async def show_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            if not registered_teams:
+                await interaction.response.send_message("📊 Пока никто не зарегистрировался", ephemeral=True)
+                return
+            
+            teams_text = ""
+            for user_id, team_data in registered_teams.items():
+                user = await bot.fetch_user(int(user_id))
+                username = user.name if user else "Неизвестный"
+                teams_text += f"• **{team_data['team_name']}** ({team_data['game'].upper()}) - {username}\n"
+            
+            embed = discord.Embed(
+                title="📊 Зарегистрированные команды",
+                description=teams_text,
+                color=0x2ecc71
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Ошибка: {e}", ephemeral=True)
+
+# ===== ПАНЕЛЬ МОДЕРАЦИИ =====
+class AdminPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label='👁️ Просмотреть заявки', style=discord.ButtonStyle.primary, custom_id='admin_view_1')
+    async def view_applications(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not registered_teams:
-            await interaction.response.send_message("📊 Пока нет команд", ephemeral=True)
+            await interaction.response.send_message("❌ Нет зарегистрированных команд.", ephemeral=True)
             return
         
-        teams_list = ""
+        embed = discord.Embed(title="📋 Все зарегистрированные команды", color=0x3498db)
         for user_id, team_data in registered_teams.items():
-            user = bot.get_user(int(user_id))
+            user = await bot.fetch_user(int(user_id))
             username = user.name if user else "Неизвестный"
-            teams_list += f"• **{team_data['team_name']}** ({team_data['game'].upper()}) - {username}\n"
+            embed.add_field(
+                name=f"🏷️ {team_data['team_name']} ({team_data['game'].upper()})", 
+                value=f"Капитан: {username}", 
+                inline=False
+            )
         
-        embed = discord.Embed(title="📊 Зарегистрированные команды", description=teams_list, color=0x2ecc71)
+        embed.set_footer(text=f"Всего команд: {len(registered_teams)}")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    @discord.ui.button(label='📤 Экспорт в файл', style=discord.ButtonStyle.secondary, custom_id='admin_export_2')
+    async def export_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not registered_teams:
+            await interaction.response.send_message("❌ Нет данных для экспорта.", ephemeral=True)
+            return
+        
+        filename = f"teams_export_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+        with open(filename, 'w', encoding='utf-8') as f:
+            for user_id, team_data in registered_teams.items():
+                user = await bot.fetch_user(int(user_id))
+                username = user.name if user else "Неизвестный"
+                f.write(f"Команда: {team_data['team_name']} | Игра: {team_data['game']} | Капитан: {username}\n")
+        
+        await interaction.response.send_message(file=discord.File(filename), ephemeral=True)
+        os.remove(filename)
+    
+    @discord.ui.button(label='🗑️ Очистить заявки', style=discord.ButtonStyle.danger, custom_id='admin_clear_3')
+    async def clear_all(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not registered_teams:
+            await interaction.response.send_message("❌ Нет данных для очистки.", ephemeral=True)
+            return
+        
+        confirm_view = ConfirmClearView()
+        await interaction.response.send_message("⚠️ Удалить ВСЕ зарегистрированные команды?", view=confirm_view, ephemeral=True)
+
+class ConfirmClearView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=30)
+    
+    @discord.ui.button(label='✅ Да', style=discord.ButtonStyle.danger)
+    async def confirm_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
+        global registered_teams
+        count = len(registered_teams)
+        registered_teams = {}
+        save_teams()
+        await interaction.response.send_message(f"✅ Удалено {count} команд!", ephemeral=True)
+    
+    @discord.ui.button(label='❌ Нет', style=discord.ButtonStyle.secondary)
+    async def cancel_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Очистка отменена.", ephemeral=True)
 
 # ===== ОБРАБОТЧИКИ СОБЫТИЙ =====
 @bot.event
@@ -439,6 +495,30 @@ async def setup_panel(interaction: discord.Interaction):
     
     await interaction.channel.send(embed=embed, view=MainPanelView())
     await interaction.response.send_message("✅ Панель установлена!", ephemeral=True)
+
+@bot.tree.command(name="modpanel", description="🛠️ Панель модерации")
+@app_commands.checks.has_permissions(administrator=True)
+async def admin_panel(interaction: discord.Interaction):
+    embed = discord.Embed(title="🛠️ Панель модерации", description="Инструменты для управления заявками", color=0xe74c3c)
+    embed.add_field(name="👁️ Просмотреть заявки", value="Список всех зарегистрированных команд", inline=False)
+    embed.add_field(name="📤 Экспорт в файл", value="Скачать список команд", inline=False)
+    embed.add_field(name="🗑️ Очистить заявки", value="Полная очистка базы", inline=False)
+    
+    await interaction.channel.send(embed=embed, view=AdminPanelView())
+    await interaction.response.send_message("✅ Панель модерации установлена!", ephemeral=True)
+
+@bot.tree.command(name="warn", description="Выдать предупреждение")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def warn_user(interaction: discord.Interaction, пользователь: discord.Member, причина: str):
+    await mod_system.apply_punishment(пользователь, "ADVERTISING", interaction.channel, причина)
+    await interaction.response.send_message(f"✅ {пользователь.mention} получил предупреждение", ephemeral=True)
+
+@bot.tree.command(name="clear_warns", description="Сбросить предупреждения")
+@app_commands.checks.has_permissions(administrator=True)
+async def clear_warnings(interaction: discord.Interaction, пользователь: discord.Member):
+    embed = discord.Embed(title="✅ Предупреждения сброшены", color=0x2ecc71)
+    embed.add_field(name="Участник", value=пользователь.mention, inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ===== МОНИТОРИНГ =====
 app = Flask(__name__)
